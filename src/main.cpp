@@ -1,4 +1,8 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <Update.h>
+#include <LittleFS.h>
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>       // https://github.com/adafruit/Adafruit_MPU6050
 #include <Adafruit_Sensor.h>        // https://github.com/adafruit/Adafruit_Sensor
@@ -6,7 +10,14 @@
 #include "AudioTools.h"
 #include "AudioLibs/AudioSourceLittleFS.h"
 #include "AudioCodecs/CodecMP3Helix.h"
+#include "semver/semver.hpp"
 
+using namespace semver::literals;
+
+// Aktuelle Version Ihrer Firmware
+const char* CURRENT_VERSION = "1.0.0";
+
+// Audio
 const char *startFilePath="/";
 const char* ext="mp3";
 AudioSourceLittleFS source(startFilePath, ext);
@@ -22,12 +33,6 @@ const int TONE  = 3;
 const int MYSDA = 2;
 const int MYSCL = 14;
 
-
-void playSound(const char* fileName) {
-  source.setPath(fileName);
-  player.begin();
-}
-
 Adafruit_MPU6050 mpu;
 
 // MPU data
@@ -42,9 +47,89 @@ bool gestureInProgress = false;
 bool untouched = true;
 int loopcount = 0;
 
+/************************************ System ******************************/
 void startDeepSleep(){
 	Serial.println("Going to deep sleep...");
 	ESP.deepSleep(5 * 1000); yield();
+}
+
+void performUpdate(const char* url, const char* type) {
+  HTTPClient http;
+  http.begin(url);
+  int httpCode = http.GET();
+  
+  if (httpCode == HTTP_CODE_OK) {
+    int contentLength = http.getSize();
+    if (contentLength > 0) {
+      bool canBegin = type == "firmware" ? Update.begin(contentLength) : Update.begin(contentLength, U_SPIFFS);
+      if (canBegin) {
+        WiFiClient * stream = http.getStreamPtr();
+        size_t written = Update.writeStream(*stream);
+        if (written == contentLength) {
+          if (Update.end()) {
+            Serial.println(type + String(" update erfolgreich"));
+            if (type == "filesystem") {
+              LittleFS.begin();
+            }
+          }
+        }
+      }
+    }
+  }
+  http.end();
+}
+
+void checkForUpdates() {
+  HTTPClient http;
+  http.begin("https://api.github.com/repos/ploenk/garrick/releases/latest");
+  int httpCode = http.GET();
+  
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (error) {
+      Serial.println("JSON parsing failed!");
+      return;
+    }
+    
+    const char* latestVersion = doc["tag_name"];
+    // Extrahieren der URLs
+    const char* firmwareUrl = doc["assets"][0]["browser_download_url"];
+    const char* filesystemUrl = doc["assets"][1]["browser_download_url"];
+    
+
+    semver::version current = semver::version::parse(CURRENT_VERSION);
+    semver::version latest = semver::version::parse(latestVersion);
+    
+    if (latestVersion > CURRENT_VERSION) {
+      Serial.println("Neue Version verfügbar!");
+      Serial.print("Aktuelle Version: ");
+      Serial.println(CURRENT_VERSION);
+      Serial.print("Neueste Version: ");
+      Serial.println(latestVersion);
+      Serial.print("Download URL: ");
+      Serial.println(firmwareUrl);
+      
+      // Filesystem-Update
+      performUpdate(filesystemUrl, "filesystem");
+
+      // Firmware-Update
+      performUpdate(firmwareUrl, "firmware");
+
+      // Neustart nach erfolgreichem Update
+      ESP.restart();
+
+    } else {
+      Serial.println("Keine neue Version verfügbar.");
+    }
+  } else {
+    Serial.println("Fehler beim Abrufen der Release-Informationen");
+  }
+  
+  http.end();
 }
 
 /************************************ LightFX ******************************/
@@ -78,6 +163,11 @@ void alarm(const int ledPin, const int freq, const int count){
 
 void soundloop(){
   player.copy();
+}
+
+void playSound(const char* fileName) {
+  source.setPath(fileName);
+  player.begin();
 }
 
 /************************************ Gestures ******************************/ 
@@ -225,12 +315,14 @@ void initlight() {
   digitalWrite(BLUE,false);
   */
 }
+
 void printMetaData(MetaDataType type, const char* str, int len){
   Serial.print("==> ");
   Serial.print(toStr(type));
   Serial.print(": ");
   Serial.println(str);
 }
+
 void initsound(const int8_t rightSpeaker) {
   pinMode (rightSpeaker,OUTPUT) ;
   Serial.print("rightSpeaker has PWM: ");
@@ -354,9 +446,6 @@ void loop() {
   if (loopcount < 3000){
     Serial.print(".");
   }
-
-
-  
   readMpu();
   detectGesture();
   detectCircularMotion();
