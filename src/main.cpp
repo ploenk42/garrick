@@ -1,25 +1,18 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include <Wire.h>
-#include <ESP8266HTTPClient.h>
-#include <ESP8266httpUpdate.h>
-#include <FS.h>
-#include <LittleFS.h>
 #include <Adafruit_MPU6050.h>       // https://github.com/adafruit/Adafruit_MPU6050
 #include <Adafruit_Sensor.h>        // https://github.com/adafruit/Adafruit_Sensor
 #include <WiFiManager.h>            // https://github.com/tzapu/WiFiManager
-#include "AudioFileSourceLittleFS.h" // https://github.com/earlephilhower/ESP8266Audio
-#include "AudioGeneratorWAV.h"
-#include "AudioOutputI2SNoDAC.h"
-#include "spellimpact.h"
+#include "AudioTools.h"
+#include "AudioLibs/AudioSourceLittleFS.h"
+#include "AudioCodecs/CodecMP3Helix.h"
 
-// A single, global CertStore which can be used by all
-// connections.  Needs to stay live the entire time any of
-// the WiFiClientBearSSLs are present.
-#include <CertStoreBearSSL.h>
-BearSSL::CertStore certStore;
-
-const char* version = "0.1.0";
+const char *startFilePath="/";
+const char* ext="mp3";
+AudioSourceLittleFS source(startFilePath, ext);
+AnalogAudioStream analog;
+MP3DecoderHelix decoder;
+AudioPlayer player(source, analog, decoder);
 
 // PINS
 const int RED   = 12;
@@ -30,10 +23,13 @@ const int MYSDA = 2;
 const int MYSCL = 14;
 
 
-AudioGeneratorWAV *wav;
-AudioFileSourceLittleFS *file;
-AudioOutputI2SNoDAC *out;
+void playSound(const char* fileName) {
+  source.setPath(fileName);
+  player.begin();
+}
+
 Adafruit_MPU6050 mpu;
+
 // MPU data
 float accX, accY, accZ;
 float gyroX, gyroY, gyroZ;
@@ -43,14 +39,7 @@ const float CIRCULAR_THRESHOLD = 2.0;
 const int   GESTURE_DURATION = 500; // milliseconds
 unsigned long gestureStartTime = 0;
 bool gestureInProgress = false;
-bool mchammer = true;
-
-// Autoupdate URIs
-// const char* firmwareInfoURI = "https://api.github.com/repos/ploenk42/espwand/releases/latest";
-// #define firmwareBinURI "https://raw.githubusercontent.com/ploenk42/espwand/firmware.bin"
-const char* firmwareInfoURI = "https://motoko.local:8443/latest";
-#define firmwareBinURI "https://motoko.local:8443/firmware.bin"
-
+bool untouched = true;
 int loopcount = 0;
 
 void startDeepSleep(){
@@ -58,12 +47,7 @@ void startDeepSleep(){
 	ESP.deepSleep(5 * 1000); yield();
 }
 
-/************************************ LightFX ******************************/ 
-void bluetick()
-{
-  int state = digitalRead(BLUE);  // get the current state
-  digitalWrite(BLUE, !state);     // set pin to the opposite state
-}
+/************************************ LightFX ******************************/
 void lighthouse(const int ledPin){
   // increase the LED brightness
   for(int dutyCycle = 0; dutyCycle < 255; dutyCycle++){   
@@ -92,91 +76,33 @@ void alarm(const int ledPin, const int freq, const int count){
 }
 /************************************ SoundFX ******************************/ 
 
-void doremi(const int tonePin,const int speed){
-    tone(tonePin, 523) ; //DO note 523 Hz
-    delay (speed); 
-    tone(tonePin, 587) ; //RE note ...
-    delay (speed); 
-    tone(tonePin, 659) ; //MI note ...
-    delay (speed); 
-    tone(tonePin, 783) ; //FA note ...
-    delay (speed); 
-    tone(tonePin, 880) ; //SOL note ...
-    delay (speed); 
-    tone(tonePin, 987) ; //LA note ...
-    delay (speed); 
-    tone(tonePin, 1046) ; // SI note ...
-    delay (speed); 
-    noTone(tonePin);
-}
-
-void playsound(const int sound){
-  if (wav->isRunning()) {
-    wav->stop();
-  }
-  file->close();
-  delete file;
-  delete wav;
-  Serial.print("play sound nr. ");
-  Serial.println(sound);
-  switch (sound) {
-  case 1:
-    file = new AudioFileSourceLittleFS("/spell.wav");
-    wav = new AudioGeneratorWAV();
-    wav->begin(file, out);
-    break;
-  case 2:
-    file = new AudioFileSourceLittleFS("/mallett.wav");
-    wav = new AudioGeneratorWAV();
-    wav->begin(file, out);
-    break;
-  case 3:
-    file = new AudioFileSourceLittleFS("/magic.wav");
-    wav = new AudioGeneratorWAV();
-    wav->begin(file, out);
-    break;
-  case 4:
-    file = new AudioFileSourceLittleFS("/swing.wav");
-    wav = new AudioGeneratorWAV();
-    wav->begin(file, out);
-    break;
-  default:
-    file = new AudioFileSourceLittleFS("/magic.wav");
-    wav = new AudioGeneratorWAV();
-    wav->begin(file, out);
-    break; // Wird nicht benötigt, wenn Statement(s) vorhanden sind
-  }
-}
-
 void soundloop(){
-  if (wav->isRunning()) {
-    if (!wav->loop()) wav->stop();
-  }
+  player.copy();
 }
 
 /************************************ Gestures ******************************/ 
 void up(){
   Serial.println("up");
   lighthouse(RED);
-  playsound(1);
+  playSound("charge.mp3");
 }
 
 void down(){
   Serial.println("down");
   lighthouse(RED);
-  playsound(2);
+  playSound("magic.mp3");
 }
 
 void rollleft(){
   Serial.println("roll left");
   lighthouse(GREEN);
-  playsound(3);
+  playSound("mullet.mp3");
 }
 
 void rollright(){
   Serial.println("roll right");
   lighthouse(GREEN);
-  playsound(4);
+  playSound("spell.mp3");
 }
 
 void detectGesture() {
@@ -269,118 +195,6 @@ void readMpu(){
   }
 }
 
-
-/************************************ Firmware ******************************/ 
-void update_started() {
-  Serial.println("CALLBACK:  HTTP update process started");
-}
-
-void update_finished() {
-  Serial.println("CALLBACK:  HTTP update process finished");
-}
-
-void update_progress(int cur, int total) {
-  Serial.printf("CALLBACK:  HTTP update process at %d of %d bytes...\n", cur, total);
-}
-
-void update_error(int err) {
-  Serial.printf("CALLBACK:  HTTP update fatal error code %d\n", err);
-}
-
-void updateFirmware() {
-  Serial.println("updating firmware");
-
-  ESPhttpUpdate.setLedPin(BLUE, HIGH);
-  // Add optional callback notifiers
-  ESPhttpUpdate.onStart(update_started);
-  ESPhttpUpdate.onEnd(update_finished);
-  ESPhttpUpdate.onProgress(update_progress);
-  ESPhttpUpdate.onError(update_error);
-
-  BearSSL::WiFiClientSecure client;
-  client.setInsecure();
-  client.setBufferSizes(1024, 1024);
-  client.setCertStore(&certStore);
-
-  t_httpUpdate_return ret = ESPhttpUpdate.update(client, firmwareBinURI);
-
-  switch (ret) {
-    case HTTP_UPDATE_FAILED:
-      Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
-      break;
-
-    case HTTP_UPDATE_NO_UPDATES:
-      Serial.println("HTTP_UPDATE_NO_UPDATES");
-      break;
-
-    case HTTP_UPDATE_OK:
-      Serial.println("HTTP_UPDATE_OK");
-      break;
-  }
-}
-
-void getNewFirmware() {
-  WiFiClientSecure *client = new WiFiClientSecure;  
-  HTTPClient http;
-  client->setInsecure();
-  http.setUserAgent("ESP8266");
-  http.addHeader("Host", "motoko.local");
-
-  Serial.print("[HTTP] begin...\n");    
-  http.begin(*client, firmwareInfoURI); //HTTP
-  
-  Serial.print("[HTTP] GET...\n");
-  // start connection and send HTTP header
-  int httpCode = http.GET();
-    delay(500);
-  // httpCode will be negative on error
-  if (httpCode > 0) {
-    // HTTP header has been send and Server response header has been handled
-    Serial.printf("[HTTP] GET... code: %d\n", httpCode);
-    if (httpCode == HTTP_CODE_OK) {
-      String firmwareInfoPayload = http.getString();
-      JsonDocument firmwareInfoJson; 
-      DeserializationError err = deserializeJson(firmwareInfoJson, firmwareInfoPayload);
-      if (err) {
-        Serial.print(F("deserializeJson() failed with code "));
-        Serial.println(err.f_str());
-      }
-      
-      String newVersion = firmwareInfoJson["tag_name"].as<String>();
-      Serial.println(newVersion);
-      if(!newVersion.equals(version)) {
-        updateFirmware();
-        Serial.println("New Version Updated!");
-      }
-      else{
-        Serial.print("Device already on latest firmware version");
-      }
-    }
-  } else {
-    Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
-  }
-}
-
-// Set time via NTP, as required for x.509 validation
-void setClock() {
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");  // UTC
-
-  Serial.print(F("Waiting for NTP time sync: "));
-  time_t now = time(nullptr);
-  while (now < 8 * 3600 * 2) {
-    yield();
-    delay(500);
-    Serial.print(F("."));
-    now = time(nullptr);
-  }
-
-  Serial.println(F(""));
-  struct tm timeinfo;
-  gmtime_r(&now, &timeinfo);
-  Serial.print(F("Current time: "));
-  Serial.print(asctime(&timeinfo));
-}
-
 /************************************ Initialize ******************************/ 
 
 void initlight() {
@@ -411,7 +225,12 @@ void initlight() {
   digitalWrite(BLUE,false);
   */
 }
-
+void printMetaData(MetaDataType type, const char* str, int len){
+  Serial.print("==> ");
+  Serial.print(toStr(type));
+  Serial.print(": ");
+  Serial.println(str);
+}
 void initsound(const int8_t rightSpeaker) {
   pinMode (rightSpeaker,OUTPUT) ;
   Serial.print("rightSpeaker has PWM: ");
@@ -421,9 +240,11 @@ void initsound(const int8_t rightSpeaker) {
   // delay (100); 
   // noTone(rightSpeaker);
   Serial.printf("initsound\n");
-  out = new AudioOutputI2SNoDAC();
-  file = new AudioFileSourceLittleFS("/magic-charge-mana-2-186628.mp3.wav");
-  wav = new AudioGeneratorWAV();
+  AudioLogger::instance().begin(Serial, AudioLogger::Info);
+
+  // setup player
+  player.setMetadataCallback(printMetaData);
+  
 }
 
 void initmpu(const int8_t data, const int8_t clock) {
@@ -503,22 +324,15 @@ void setup(void) {
   while (!Serial)
     delay(10); // will pause until serial console opens
   delay(100);
-  WiFiManager wifiManager;
-  wifiManager.setTimeout(180); // seconds until configuration portal gets turned off
-  wifiManager.autoConnect("Zauberstab");
+  // Initialize LittleFS
+  if(!LittleFS.begin()){
+    Serial.println("An Error has occurred while mounting LittleFS");
+    return;
+  }
   initsound(TONE);
   initlight();
   //initmpu(SDA,SCL);
   initmpu(MYSDA,MYSCL);  
-  LittleFS.begin();
-  int numCerts = certStore.initCertStore(LittleFS, PSTR("/certs.idx"), PSTR("/certs.ar"));
-  Serial.print(F("Number of CA certs read: "));
-  Serial.println(numCerts);
-  if (numCerts == 0) {
-    Serial.println(F("No certs found. Did you run certs-from-mozilla.py and upload the LittleFS directory before running?"));
-    return;  // Can't connect to anything w/o certs!
-  }
-
 }
 
 /************************************  Mainloop ******************************/ 
@@ -526,16 +340,23 @@ void setup(void) {
 void loop() {
   loopcount=loopcount+1;
   if(gestureInProgress){
-    mchammer=false;
+    untouched=false;
   }
   if (loopcount == 3000) {
-    if(mchammer) {
-      getNewFirmware();
+    if(untouched) {
+        alarm(BLUE,400,3);
+        WiFiManager wifiManager;
+        wifiManager.resetSettings();
+        wifiManager.setTimeout(180); // seconds until configuration portal gets turned off
+        wifiManager.autoConnect("Zauberstab");
     }
   }
   if (loopcount < 3000){
     Serial.print(".");
   }
+
+
+  
   readMpu();
   detectGesture();
   detectCircularMotion();
