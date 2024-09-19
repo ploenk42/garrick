@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <Update.h>
 #include <LittleFS.h>
 #include <Wire.h>
@@ -16,6 +17,34 @@ using namespace semver::literals;
 
 // Aktuelle Version Ihrer Firmware
 const char* CURRENT_VERSION = "1.0.0";
+//const char* REPO_URL = "https://api.github.com/repos/ploenk42/garrick/releases/latest";
+const char* REPO_URL = "https://motoko.local:8443/latest";
+
+// Your self-signed certificate in PEM format
+const char* rootCACertificate = R"(
+-----BEGIN CERTIFICATE-----
+MIIDmTCCAoGgAwIBAgIUKeTDccZntHxV8ISSR8hbHTf86ugwDQYJKoZIhvcNAQEL
+BQAwXDELMAkGA1UEBhMCQVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoM
+GEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDEVMBMGA1UEAwwMbW90b2tvLmxvY2Fs
+MB4XDTI0MDkxNDIxMzAxNVoXDTI1MDkxNDIxMzAxNVowXDELMAkGA1UEBhMCQVUx
+EzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdpdHMg
+UHR5IEx0ZDEVMBMGA1UEAwwMbW90b2tvLmxvY2FsMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAkYV9UpFmz891Y+woT7+/aVmH4qoeOWX2Bkwx+OGBdrho
+nNpBD6H/bgKfB+P/gSrooa5Um+A6f5yfpmVua6rG576SIlS6hNsBVwBvFaIoLyOO
+r4LyGiMNqfNWY6wmBit9qLws4wg9C7b6pn8aVSXHK9BnF/sKBTDhj/Go9doRpD0x
+fTOIKDyTM7LB4lJ6YlE1LmIDAMVj9+ROpW96U+d5BLlsLCUwSpFfmCLfcy4yGKJG
+YEJpcsvSfxocEXl/B/r5fCdWStlzlWKNjO2BXZ5tTdwHW4lCWMb1VGlIhVgkRRhz
+01F2AIQ5VeDvFKpxXngza9J3VS1cXm4Q0S/pS6meeQIDAQABo1MwUTAdBgNVHQ4E
+FgQUsJa+9L2353ihbphuiM713K+mKrYwHwYDVR0jBBgwFoAUsJa+9L2353ihbphu
+iM713K+mKrYwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEADFA2
+MW+Mde8orNmqJ0tjz4iOaL/FP9lyNyZ6aP2QOBr8ZZwDQ9o4QIpnMTBVp67jFh8A
+oE4DnnnN1V5iXdIvLn619JcKbjElMcp/aPEh6vFQjaRwXOAfsqO3mWirxOBkI6Ub
+Bto96gU+Z9SsIToAA9kvLJErSdxZKgQhcUJP0AR+pmbcU+RrvsDsTbU7jZQqxU37
+XOxw7K97lH/Mqrkl3ecCEocn6J13k+aVbr174upjvp7vdEqyqrwBpnLh2tLpHs3h
+AQ8zAlIsBt8f5r83iJH69RNH1BFJvBXvEa1uuqY2ojdjpTKPEWR/Z8ESoRNowq7e
+BxMioL9s0L4LCWo8qA==
+-----END CERTIFICATE-----
+)";
 
 // Audio
 const char *startFilePath="/";
@@ -26,12 +55,15 @@ MP3DecoderHelix decoder;
 AudioPlayer player(source, analog, decoder);
 
 // PINS
-const int RED   = 12;
-const int GREEN = 13;
-const int BLUE  = 15;
+// const int RED   = 12;
+// const int GREEN = 13;
+// const int BLUE  = 15;
+const int RED   = 4;
+const int GREEN = 4;
+const int BLUE  = 4;
 const int TONE  = 3;
-const int MYSDA = 2;
-const int MYSCL = 14;
+const int MYSDA = 2; // ESP8266EX 12f
+const int MYSCL = 14;// ESP8266EX 12f
 
 Adafruit_MPU6050 mpu;
 
@@ -50,86 +82,152 @@ int loopcount = 0;
 /************************************ System ******************************/
 void startDeepSleep(){
 	Serial.println("Going to deep sleep...");
-	ESP.deepSleep(5 * 1000); yield();
+	ESP.deepSleep(5 * 10000);
+  yield();
 }
 
-void performUpdate(const char* url, const char* type) {
-  HTTPClient http;
-  http.begin(url);
-  int httpCode = http.GET();
-  
-  if (httpCode == HTTP_CODE_OK) {
-    int contentLength = http.getSize();
-    if (contentLength > 0) {
-      bool canBegin = type == "firmware" ? Update.begin(contentLength) : Update.begin(contentLength, U_SPIFFS);
-      if (canBegin) {
-        WiFiClient * stream = http.getStreamPtr();
-        size_t written = Update.writeStream(*stream);
-        if (written == contentLength) {
-          if (Update.end()) {
-            Serial.println(type + String(" update erfolgreich"));
-            if (type == "filesystem") {
-              LittleFS.begin();
-            }
-          }
-        }
-      }
+bool performUpdate(const char* url, const char* type) {
+  Serial.println("performUpdate...");
+  WiFiClientSecure *client = new WiFiClientSecure;
+
+  if(!client) {
+    Serial.println("ERROR: Unable to create client");
+    return false;
+  }
+
+  client->setCACert(rootCACertificate);
+  HTTPClient https;
+  Serial.printf("begin https connection to %s\n",url);
+  if (!https.begin(*client, url)) {
+    Serial.println("ERROR: Unable to begin https connection");
+    delete client;
+    return false;
+  }
+
+  Serial.printf("get content from %s ...",url);
+  int httpCode = https.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("ERROR: https unable to get content... code: %d\n", httpCode);
+    https.end();
+    delete client;
+    return false;
+  }
+  Serial.println(httpCode);
+
+  Serial.print("get content size...");
+  int contentLength = https.getSize();
+  Serial.println(contentLength);
+  if (contentLength <= 0) {
+    Serial.printf("ERROR: content size 0");
+    https.end();
+    delete client;
+    return false;
+  }
+
+  // Initialize update depending on type "firmware" or "filesystem"
+  if (type == "firmware"){
+    if (!Update.begin(contentLength)){
+      Serial.printf("Not enough space for %s\n",type);
+      https.end();
+      delete client;
+      return false;
+    };
+  }
+  if (type == "filesystem"){
+    if (!Update.begin(contentLength, U_SPIFFS)){
+      Serial.printf("Not enough space for %s\n",type);
+      https.end();
+      delete client;
+      return false;
     }
   }
-  http.end();
+  
+  // Flash
+  Serial.printf("Downloading %s ...\n",type);
+  Serial.printf("Updating %s ...\n",type);
+  WiFiClient * stream = https.getStreamPtr();
+  size_t written = Update.writeStream(*stream);
+  if (written != contentLength) {
+    Serial.printf("ERROR: couldn't write all bytes to %s \n",type);
+    Serial.printf(" size %d ",contentLength);
+    Serial.printf(" written %d \n",written);
+    https.end();
+    delete client;
+    return false;
+  }
+  if (Update.end()) {
+    Serial.printf("%s update successful\n",type);
+    if (type == "filesystem") {
+      Serial.println("Starting new filesystem!");
+      LittleFS.begin();
+    }
+  }
+  https.end();
+  delete client;
+  return true;
 }
 
 void checkForUpdates() {
-  HTTPClient http;
-  http.begin("https://api.github.com/repos/ploenk/garrick/releases/latest");
-  int httpCode = http.GET();
-  
-  if (httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
-    
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (error) {
-      Serial.println("JSON parsing failed!");
-      return;
-    }
-    
-    const char* latestVersion = doc["tag_name"];
-    // Extrahieren der URLs
-    const char* firmwareUrl = doc["assets"][0]["browser_download_url"];
-    const char* filesystemUrl = doc["assets"][1]["browser_download_url"];
-    
+  Serial.println("checkForUpdates...");
+  WiFiClientSecure *client = new WiFiClientSecure;
+  if(client) {
+    client->setCACert(rootCACertificate);
+    HTTPClient https;
+    Serial.println("https begin...");
+    if (https.begin(*client, REPO_URL)) {
+      Serial.println("https GET...");
+      int httpCode = https.GET();
+      if (httpCode > 0) {
+        Serial.printf("https GET... code: %d\n", httpCode);
+        if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+          String payload = https.getString();
+          JsonDocument doc;
+          DeserializationError error = deserializeJson(doc, payload);
+          if (error) {
+            Serial.println("JSON parsing failed!");
+            return;
+          }
+          const char* latestVersion = doc["tag_name"];
+          // Extrahieren der URLs
+          const char* firmwareUrl = doc["assets"][0]["browser_download_url"];
+          const char* filesystemUrl = doc["assets"][1]["browser_download_url"];
+          
 
-    semver::version current = semver::version::parse(CURRENT_VERSION);
-    semver::version latest = semver::version::parse(latestVersion);
-    
-    if (latestVersion > CURRENT_VERSION) {
-      Serial.println("Neue Version verfügbar!");
-      Serial.print("Aktuelle Version: ");
-      Serial.println(CURRENT_VERSION);
-      Serial.print("Neueste Version: ");
-      Serial.println(latestVersion);
-      Serial.print("Download URL: ");
-      Serial.println(firmwareUrl);
-      
-      // Filesystem-Update
-      performUpdate(filesystemUrl, "filesystem");
+          semver::version current = semver::version::parse(CURRENT_VERSION);
+          semver::version latest = semver::version::parse(latestVersion);
+          
+          if (latest > current) {
+            Serial.println("Neue Version verfügbar!");
+            Serial.printf("Aktuelle Version: %s\n",CURRENT_VERSION);
+            Serial.printf("Neueste Version: %s\n",latestVersion);
+            Serial.printf("filesystemUrl: %s\n",filesystemUrl);
+            Serial.printf("firmwareUrl: %s\n",firmwareUrl);
+            
+            // Filesystem-Update
+            if (performUpdate(filesystemUrl, "filesystem")){
+              // Firmware-Update
+              performUpdate(firmwareUrl, "firmware");
+            }
 
-      // Firmware-Update
-      performUpdate(firmwareUrl, "firmware");
 
-      // Neustart nach erfolgreichem Update
-      ESP.restart();
+            // Neustart nach erfolgreichem Update
+            ESP.restart();
 
+          } else {
+            Serial.println("Keine neue Version verfügbar.");
+          }
+        } else {
+          Serial.println("Fehler beim Abrufen der Release-Informationen");
+        }
+      }
+      https.end();
     } else {
-      Serial.println("Keine neue Version verfügbar.");
+      Serial.printf("https Unable to connect\n");
     }
+    delete client;
   } else {
-    Serial.println("Fehler beim Abrufen der Release-Informationen");
+    Serial.println("Unable to create client");
   }
-  
-  http.end();
 }
 
 /************************************ LightFX ******************************/
@@ -149,7 +247,7 @@ void lighthouse(const int ledPin){
   }
 }
 
-void alarm(const int ledPin, const int freq, const int count){
+void playAlarm(const int ledPin, const int freq, const int count){
   Serial.println("ALARM!");
   for (int i=0; i < count; i++){
     digitalWrite(ledPin,1);
@@ -174,25 +272,25 @@ void playSound(const char* fileName) {
 void up(){
   Serial.println("up");
   lighthouse(RED);
-  playSound("charge.mp3");
+  playSound("/charge.mp3");
 }
 
 void down(){
   Serial.println("down");
   lighthouse(RED);
-  playSound("magic.mp3");
+  playSound("/magic.mp3");
 }
 
 void rollleft(){
   Serial.println("roll left");
   lighthouse(GREEN);
-  playSound("mullet.mp3");
+  playSound("/mullet.mp3");
 }
 
 void rollright(){
   Serial.println("roll right");
   lighthouse(GREEN);
-  playSound("spell.mp3");
+  playSound("/spell.mp3");
 }
 
 void detectGesture() {
@@ -267,20 +365,22 @@ void readMpu(){
   // Emergencysleep
   if (temp.temperature > 50 && temp.temperature < 80){
     Serial.println("Temperature exceeded 50°");
-    alarm(RED,2000,4);
+    //SIGNAL
+    playAlarm(RED,2000,4);
     startDeepSleep();
   }
   if (temp.temperature > 80){
     Serial.println("Temperature exceeded 80°");
-    alarm(RED,1000,1);
-    alarm(GREEN,1200,1);
-    alarm(BLUE,1400,1);
-    alarm(RED,1600,1);
-    alarm(GREEN,1800,1);
-    alarm(BLUE,2000,1);
-    alarm(RED,2200,1);
-    alarm(GREEN,2400,1);
-    alarm(BLUE,2600,1);
+    //SIGNAL
+    playAlarm(RED,1000,1);
+    playAlarm(GREEN,1200,1);
+    playAlarm(BLUE,1400,1);
+    playAlarm(RED,1600,1);
+    playAlarm(GREEN,1800,1);
+    playAlarm(BLUE,2000,1);
+    playAlarm(RED,2200,1);
+    playAlarm(GREEN,2400,1);
+    playAlarm(BLUE,2600,1);
     ESP.deepSleep(0);
   }
 }
@@ -344,10 +444,9 @@ void initmpu(const int8_t data, const int8_t clock) {
   delay(100);
   if (!mpu.begin()) {
     Serial.println("Failed to find MPU6050 chip");
-    while (1) {
-      delay(1000);
-      lighthouse(RED);
-    }
+      playAlarm(RED,1000,2);
+      playAlarm(BLUE,1000,2);
+      return;
   }
   Serial.println("MPU6050 Found!");
 
@@ -423,8 +522,7 @@ void setup(void) {
   }
   initsound(TONE);
   initlight();
-  //initmpu(SDA,SCL);
-  initmpu(MYSDA,MYSCL);  
+  initmpu(SDA,SCL);  
 }
 
 /************************************  Mainloop ******************************/ 
@@ -434,19 +532,27 @@ void loop() {
   if(gestureInProgress){
     untouched=false;
   }
-  if (loopcount == 3000) {
+  if (loopcount == 1) {
     if(untouched) {
-        alarm(BLUE,400,3);
+        //SIGNAL
+        playAlarm(BLUE,400,3);
         WiFiManager wifiManager;
-        wifiManager.resetSettings();
-        wifiManager.setTimeout(180); // seconds until configuration portal gets turned off
-        wifiManager.autoConnect("Zauberstab");
+        wifiManager.autoConnect("garrick");
+        checkForUpdates();
     }
   }
   if (loopcount < 3000){
     Serial.print(".");
   }
-  readMpu();
+  try {
+    readMpu();
+  } catch(String error) {
+    Serial.print("Can't read from MPU6050 error: ");
+    Serial.println(error);
+    //SIGNAL
+    playAlarm(RED,1000,2);
+    playAlarm(BLUE,1000,2);
+  }
   detectGesture();
   detectCircularMotion();
   soundloop();
