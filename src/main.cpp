@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Math.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -8,12 +9,22 @@
 #include <Adafruit_MPU6050.h>       // https://github.com/adafruit/Adafruit_MPU6050
 #include <Adafruit_Sensor.h>        // https://github.com/adafruit/Adafruit_Sensor
 #include <WiFiManager.h>            // https://github.com/tzapu/WiFiManager
-#include "AudioTools.h"
-#include "AudioLibs/AudioSourceLittleFS.h"
-#include "AudioCodecs/CodecMP3Helix.h"
-#include "semver/semver.hpp"
-
-using namespace semver::literals;
+#include <XT_DAC_Audio.h>
+#include <Spell1.h>
+#include <Spell2.h>
+#include <Spell3.h>                 // Lumos
+#include <Spell4.h>                 // Lumos2
+#include <Spell6.h>
+#include <Spell7.h>
+#include <Spell8.h>
+#include <Spell10.h>
+#include <Spell11.h>
+#include <Spell12.h>
+ 
+XT_DAC_Audio_Class DacAudio(25,0);    // Create the main player class object. 
+                                      // Use GPIO 25, one of the 2 DAC pins and timer 0
+XT_Wav_Class wav(Spell6_wav);     // create an object of type XT_Wav_Class that is used by 
+                                      // the dac audio class (below), passing wav data as parameter.
 
 // Aktuelle Version Ihrer Firmware
 const char* CURRENT_VERSION = "1.0.0";
@@ -48,22 +59,14 @@ BxMioL9s0L4LCWo8qA==
 
 // Audio
 const char *startFilePath="/";
-const char* ext="mp3";
-AudioSourceLittleFS source(startFilePath, ext);
-AnalogAudioStream analog;
-MP3DecoderHelix decoder;
-AudioPlayer player(source, analog, decoder);
+const char* ext="WAV";
 
 // PINS
-// const int RED   = 12;
-// const int GREEN = 13;
-// const int BLUE  = 15;
-const int RED   = 4;
-const int GREEN = 4;
-const int BLUE  = 4;
-const int TONE  = 3;
-const int MYSDA = 2; // ESP8266EX 12f
-const int MYSCL = 14;// ESP8266EX 12f
+const int GREEN = 13;
+const int RED   = 15;
+const int BLUE  = 2;
+//const int MYSDA = 2; // ESP8266EX 12f
+//const int MYSCL = 14;// ESP8266EX 12f
 
 Adafruit_MPU6050 mpu;
 
@@ -71,9 +74,9 @@ Adafruit_MPU6050 mpu;
 float accX, accY, accZ;
 float gyroX, gyroY, gyroZ;
 // Gestures, adjust thresholds as needed
-const float GESTURE_THRESHOLD = 5.0;
+const float GESTURE_THRESHOLD = 4.0;
 const float CIRCULAR_THRESHOLD = 2.0;
-const int   GESTURE_DURATION = 500; // milliseconds
+const int   GESTURE_DURATION = 100; // milliseconds
 unsigned long gestureStartTime = 0;
 bool gestureInProgress = false;
 bool untouched = true;
@@ -81,44 +84,51 @@ int loopcount = 0;
 
 /************************************ System ******************************/
 void startDeepSleep(){
-	Serial.println("Going to deep sleep...");
-	ESP.deepSleep(5 * 10000);
+	// DEBUG: Serial.println("Going to deep sleep...");
+  mpu.enableSleep(true);
+	ESP.deepSleep(5 * 1000000);
   yield();
 }
 
+bool isVersionGreater(const char* v1, const char* v2) {
+  int a, b, c, d, e, f;
+  sscanf(v1, "%d.%d.%d", &a, &b, &c);
+  sscanf(v2, "%d.%d.%d", &d, &e, &f);
+  return (a > d) || (a == d && b > e) || (a == d && b == e && c > f);
+}
 bool performUpdate(const char* url, const char* type) {
-  Serial.println("performUpdate...");
+  // DEBUG: Serial.println("performUpdate...");
   WiFiClientSecure *client = new WiFiClientSecure;
 
   if(!client) {
-    Serial.println("ERROR: Unable to create client");
+    // DEBUG: Serial.println("ERROR: Unable to create client");
     return false;
   }
 
   client->setCACert(rootCACertificate);
   HTTPClient https;
-  Serial.printf("begin https connection to %s\n",url);
+  // DEBUG: Serial.printf("begin https connection to %s\n",url);
   if (!https.begin(*client, url)) {
-    Serial.println("ERROR: Unable to begin https connection");
+    // DEBUG: Serial.println("ERROR: Unable to begin https connection");
     delete client;
     return false;
   }
 
-  Serial.printf("get content from %s ...",url);
+  // DEBUG: Serial.printf("get content from %s ...",url);
   int httpCode = https.GET();
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("ERROR: https unable to get content... code: %d\n", httpCode);
+    // DEBUG: Serial.printf("ERROR: https unable to get content... code: %d\n", httpCode);
     https.end();
     delete client;
     return false;
   }
-  Serial.println(httpCode);
+  // DEBUG: Serial.println(httpCode);
 
-  Serial.print("get content size...");
+  // DEBUG: Serial.print("get content size...");
   int contentLength = https.getSize();
-  Serial.println(contentLength);
+  // DEBUG: Serial.println(contentLength);
   if (contentLength <= 0) {
-    Serial.printf("ERROR: content size 0");
+    // DEBUG: Serial.printf("ERROR: content size 0");
     https.end();
     delete client;
     return false;
@@ -127,7 +137,7 @@ bool performUpdate(const char* url, const char* type) {
   // Initialize update depending on type "firmware" or "filesystem"
   if (type == "firmware"){
     if (!Update.begin(contentLength)){
-      Serial.printf("Not enough space for %s\n",type);
+      // DEBUG: Serial.printf("Not enough space for %s\n",type);
       https.end();
       delete client;
       return false;
@@ -135,7 +145,7 @@ bool performUpdate(const char* url, const char* type) {
   }
   if (type == "filesystem"){
     if (!Update.begin(contentLength, U_SPIFFS)){
-      Serial.printf("Not enough space for %s\n",type);
+      // DEBUG: Serial.printf("Not enough space for %s\n",type);
       https.end();
       delete client;
       return false;
@@ -143,22 +153,22 @@ bool performUpdate(const char* url, const char* type) {
   }
   
   // Flash
-  Serial.printf("Downloading %s ...\n",type);
-  Serial.printf("Updating %s ...\n",type);
+  // DEBUG: Serial.printf("Downloading %s ...\n",type);
+  // DEBUG: Serial.printf("Updating %s ...\n",type);
   WiFiClient * stream = https.getStreamPtr();
   size_t written = Update.writeStream(*stream);
   if (written != contentLength) {
-    Serial.printf("ERROR: couldn't write all bytes to %s \n",type);
-    Serial.printf(" size %d ",contentLength);
-    Serial.printf(" written %d \n",written);
+    // DEBUG: Serial.printf("ERROR: couldn't write all bytes to %s \n",type);
+    // DEBUG: Serial.printf(" size %d ",contentLength);
+    // DEBUG: Serial.printf(" written %d \n",written);
     https.end();
     delete client;
     return false;
   }
   if (Update.end()) {
-    Serial.printf("%s update successful\n",type);
+    // DEBUG: Serial.printf("%s update successful\n",type);
     if (type == "filesystem") {
-      Serial.println("Starting new filesystem!");
+      // DEBUG: Serial.println("Starting new filesystem!");
       LittleFS.begin();
     }
   }
@@ -168,23 +178,23 @@ bool performUpdate(const char* url, const char* type) {
 }
 
 void checkForUpdates() {
-  Serial.println("checkForUpdates...");
+  // DEBUG: Serial.println("checkForUpdates...");
   WiFiClientSecure *client = new WiFiClientSecure;
   if(client) {
     client->setCACert(rootCACertificate);
     HTTPClient https;
-    Serial.println("https begin...");
+    // DEBUG: Serial.println("https begin...");
     if (https.begin(*client, REPO_URL)) {
-      Serial.println("https GET...");
+      // DEBUG: Serial.println("https GET...");
       int httpCode = https.GET();
       if (httpCode > 0) {
-        Serial.printf("https GET... code: %d\n", httpCode);
+        // DEBUG: Serial.printf("https GET... code: %d\n", httpCode);
         if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
           String payload = https.getString();
           JsonDocument doc;
           DeserializationError error = deserializeJson(doc, payload);
           if (error) {
-            Serial.println("JSON parsing failed!");
+            // DEBUG: Serial.println("JSON parsing failed!");
             return;
           }
           const char* latestVersion = doc["tag_name"];
@@ -192,16 +202,12 @@ void checkForUpdates() {
           const char* firmwareUrl = doc["assets"][0]["browser_download_url"];
           const char* filesystemUrl = doc["assets"][1]["browser_download_url"];
           
-
-          semver::version current = semver::version::parse(CURRENT_VERSION);
-          semver::version latest = semver::version::parse(latestVersion);
-          
-          if (latest > current) {
-            Serial.println("Neue Version verfügbar!");
-            Serial.printf("Aktuelle Version: %s\n",CURRENT_VERSION);
-            Serial.printf("Neueste Version: %s\n",latestVersion);
-            Serial.printf("filesystemUrl: %s\n",filesystemUrl);
-            Serial.printf("firmwareUrl: %s\n",firmwareUrl);
+          if (isVersionGreater(latestVersion, CURRENT_VERSION)) {
+            // DEBUG: Serial.println("Neue Version verfügbar!");
+            // DEBUG: Serial.printf("Aktuelle Version: %s\n",CURRENT_VERSION);
+            // DEBUG: Serial.printf("Neueste Version: %s\n",latestVersion);
+            // DEBUG: Serial.printf("filesystemUrl: %s\n",filesystemUrl);
+            // DEBUG: Serial.printf("firmwareUrl: %s\n",firmwareUrl);
             
             // Filesystem-Update
             if (performUpdate(filesystemUrl, "filesystem")){
@@ -209,24 +215,23 @@ void checkForUpdates() {
               performUpdate(firmwareUrl, "firmware");
             }
 
-
             // Neustart nach erfolgreichem Update
             ESP.restart();
 
           } else {
-            Serial.println("Keine neue Version verfügbar.");
+            // DEBUG: Serial.println("Keine neue Version verfügbar.");
           }
         } else {
-          Serial.println("Fehler beim Abrufen der Release-Informationen");
+          // DEBUG: Serial.println("Fehler beim Abrufen der Release-Informationen");
         }
       }
       https.end();
     } else {
-      Serial.printf("https Unable to connect\n");
+      // DEBUG: Serial.printf("https Unable to connect\n");
     }
     delete client;
   } else {
-    Serial.println("Unable to create client");
+    // DEBUG: Serial.println("Unable to create client");
   }
 }
 
@@ -248,49 +253,64 @@ void lighthouse(const int ledPin){
 }
 
 void playAlarm(const int ledPin, const int freq, const int count){
-  Serial.println("ALARM!");
+  // DEBUG: Serial.println("ALARM!");
   for (int i=0; i < count; i++){
     digitalWrite(ledPin,1);
-    tone(TONE, freq) ;
+    //tone(TONE, freq) ;
     delay (500); 
-    noTone(TONE);
+    //noTone(TONE);
     digitalWrite(ledPin,0);
   }
 }
 /************************************ SoundFX ******************************/ 
 
-void soundloop(){
-  player.copy();
-}
 
-void playSound(const char* fileName) {
-  source.setPath(fileName);
-  player.begin();
+void playSound(const char* filename) {
+  if(!wav.Playing)          // if completed playing, play again
+    DacAudio.Play(&wav);  
+  /*
+  File file = LittleFS.open(filename, "r");
+  if (!file) {
+    // DEBUG: Serial.println("Failed to open file for reading");
+    return;
+  }
+
+  // Skip WAV header
+  file.seek(44);
+  
+  while (file.available()) {
+    uint8_t sample = file.read();
+    dac_output_voltage(DAC_CHANNEL_1, sample);
+    delayMicroseconds(125);  // Adjust this for different sample rates
+  }
+
+  file.close();
+  */
 }
 
 /************************************ Gestures ******************************/ 
 void up(){
-  Serial.println("up");
+  // DEBUG: Serial.println("up");
   lighthouse(RED);
-  playSound("/charge.mp3");
+  playSound("/charge.wav");
 }
 
 void down(){
-  Serial.println("down");
+  // DEBUG: Serial.println("down");
   lighthouse(RED);
-  playSound("/magic.mp3");
+  playSound("/magic.wav");
 }
 
 void rollleft(){
-  Serial.println("roll left");
+  // DEBUG: Serial.println("roll left");
   lighthouse(GREEN);
-  playSound("/mullet.mp3");
+  playSound("/mullet.wav");
 }
 
 void rollright(){
-  Serial.println("roll right");
+  // DEBUG: Serial.println("roll right");
   lighthouse(GREEN);
-  playSound("/spell.mp3");
+  playSound("/spell.wav");
 }
 
 void detectGesture() {
@@ -327,7 +347,7 @@ bool isCircularMotion() {
   // For simplicity, this example just checks if the magnitude
   // of angular velocity remains above the threshold for the duration
   float magnitude = sqrt(gyroX*gyroX + gyroY*gyroY);
-  Serial.println(magnitude);
+  // DEBUG: Serial.println(magnitude);
   return (magnitude > CIRCULAR_THRESHOLD);
 }
 
@@ -345,11 +365,15 @@ void detectCircularMotion() {
         analogWrite(BLUE,   255);
         delay(1000);
         analogWrite(BLUE,   0);
-        Serial.println("Circular motion detected!");
+        // DEBUG: Serial.println("Circular motion detected!");
       }
       gestureInProgress = false;
     }
   }
+}
+
+int leftFiveDigits(double num) {
+  return (int)num*100;
 }
 
 void readMpu(){
@@ -364,13 +388,13 @@ void readMpu(){
   gyroZ = g.acceleration.z;
   // Emergencysleep
   if (temp.temperature > 50 && temp.temperature < 80){
-    Serial.println("Temperature exceeded 50°");
+    // DEBUG: Serial.println("Temperature exceeded 50°");
     //SIGNAL
     playAlarm(RED,2000,4);
     startDeepSleep();
   }
   if (temp.temperature > 80){
-    Serial.println("Temperature exceeded 80°");
+    // DEBUG: Serial.println("Temperature exceeded 80°");
     //SIGNAL
     playAlarm(RED,1000,1);
     playAlarm(GREEN,1200,1);
@@ -391,121 +415,100 @@ void initlight() {
   pinMode(RED,   OUTPUT);
   pinMode(GREEN, OUTPUT);
   pinMode(BLUE,  OUTPUT);
-  Serial.print("RED has PWM: ");
-  Serial.println(digitalPinHasPWM(RED));
-  Serial.print("GREEN has PWM: ");
-  Serial.println(digitalPinHasPWM(GREEN));
-  Serial.print("BLUE has PWM: ");
-  Serial.println(digitalPinHasPWM(BLUE));
-  /* DEBUG
+  // DEBUG: Serial.print("RED has PWM: ");
+  // DEBUG: Serial.println(digitalPinHasPWM(RED));
+  // DEBUG: Serial.print("GREEN has PWM: ");
+  // DEBUG: Serial.println(digitalPinHasPWM(GREEN));
+  // DEBUG: Serial.print("BLUE has PWM: ");
+  // DEBUG: Serial.println(digitalPinHasPWM(BLUE));
   //RED
   digitalWrite(RED,false);
   digitalWrite(RED,true);
-  delay(100);
+  delay(1000);
   digitalWrite(RED,false);
   //GREEN
   digitalWrite(GREEN,false);
   digitalWrite(GREEN,true);
-  delay(100);
+  delay(1000);
   digitalWrite(GREEN,false);
   //BLUE
   digitalWrite(BLUE,false);
   digitalWrite(BLUE,true);
-  delay(100);
+  delay(1000);
   digitalWrite(BLUE,false);
-  */
-}
-
-void printMetaData(MetaDataType type, const char* str, int len){
-  Serial.print("==> ");
-  Serial.print(toStr(type));
-  Serial.print(": ");
-  Serial.println(str);
-}
-
-void initsound(const int8_t rightSpeaker) {
-  pinMode (rightSpeaker,OUTPUT) ;
-  Serial.print("rightSpeaker has PWM: ");
-  Serial.println(digitalPinHasPWM(rightSpeaker));
-  //DEBUG
-  // tone(rightSpeaker, 1046) ;
-  // delay (100); 
-  // noTone(rightSpeaker);
-  Serial.printf("initsound\n");
-  AudioLogger::instance().begin(Serial, AudioLogger::Info);
-
-  // setup player
-  player.setMetadataCallback(printMetaData);
-  
 }
 
 void initmpu(const int8_t data, const int8_t clock) {
   Wire.begin(data,clock);
   delay(100);
   if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
+    // DEBUG: Serial.println("Failed to find MPU6050 chip");
       playAlarm(RED,1000,2);
       playAlarm(BLUE,1000,2);
       return;
   }
-  Serial.println("MPU6050 Found!");
+  // DEBUG: Serial.println("MPU6050 Found!");
 
-  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  Serial.print("Accelerometer range set to: ");
+  // Set the accelerometer range (2, 4, 8, or 16 G)
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
+  // Set the bandwidth to the lowest setting
+  mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+  // Set the wake frequency (options are 1.25 Hz, 5 Hz, 20 Hz, 40 Hz)
+  mpu.setCycleRate(MPU6050_CYCLE_5_HZ);
+
+  // DEBUG: Serial.print("Accelerometer range set to: ");
   switch (mpu.getAccelerometerRange()) {
   case MPU6050_RANGE_2_G:
-    Serial.println("+-2G");
+    // DEBUG: Serial.println("+-2G");
     break;
   case MPU6050_RANGE_4_G:
-    Serial.println("+-4G");
+    // DEBUG: Serial.println("+-4G");
     break;
   case MPU6050_RANGE_8_G:
-    Serial.println("+-8G");
+    // DEBUG: Serial.println("+-8G");
     break;
   case MPU6050_RANGE_16_G:
-    Serial.println("+-16G");
+    // DEBUG: Serial.println("+-16G");
     break;
   }
-  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  Serial.print("Gyro range set to: ");
+  // DEBUG: Serial.print("Gyro range set to: ");
   switch (mpu.getGyroRange()) {
   case MPU6050_RANGE_250_DEG:
-    Serial.println("+- 250 deg/s");
+    // DEBUG: Serial.println("+- 250 deg/s");
     break;
   case MPU6050_RANGE_500_DEG:
-    Serial.println("+- 500 deg/s");
+    // DEBUG: Serial.println("+- 500 deg/s");
     break;
   case MPU6050_RANGE_1000_DEG:
-    Serial.println("+- 1000 deg/s");
+    // DEBUG: Serial.println("+- 1000 deg/s");
     break;
   case MPU6050_RANGE_2000_DEG:
-    Serial.println("+- 2000 deg/s");
+    // DEBUG: Serial.println("+- 2000 deg/s");
     break;
   }
 
-  mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
-  Serial.print("Filter bandwidth set to: ");
+  // DEBUG: Serial.print("Filter bandwidth set to: ");
   switch (mpu.getFilterBandwidth()) {
   case MPU6050_BAND_260_HZ:
-    Serial.println("260 Hz");
+    // DEBUG: Serial.println("260 Hz");
     break;
   case MPU6050_BAND_184_HZ:
-    Serial.println("184 Hz");
+    // DEBUG: Serial.println("184 Hz");
     break;
   case MPU6050_BAND_94_HZ:
-    Serial.println("94 Hz");
+    // DEBUG: Serial.println("94 Hz");
     break;
   case MPU6050_BAND_44_HZ:
-    Serial.println("44 Hz");
+    // DEBUG: Serial.println("44 Hz");
     break;
   case MPU6050_BAND_21_HZ:
-    Serial.println("21 Hz");
+    // DEBUG: Serial.println("21 Hz");
     break;
   case MPU6050_BAND_10_HZ:
-    Serial.println("10 Hz");
+    // DEBUG: Serial.println("10 Hz");
     break;
   case MPU6050_BAND_5_HZ:
-    Serial.println("5 Hz");
+    // DEBUG: Serial.println("5 Hz");
     break;
   }
 }
@@ -517,10 +520,10 @@ void setup(void) {
   delay(100);
   // Initialize LittleFS
   if(!LittleFS.begin()){
-    Serial.println("An Error has occurred while mounting LittleFS");
+    // DEBUG: Serial.println("An Error has occurred while mounting LittleFS");
     return;
   }
-  initsound(TONE);
+  //dac_output_enable(DAC_CHANNEL_1);
   initlight();
   initmpu(SDA,SCL);  
 }
@@ -528,33 +531,44 @@ void setup(void) {
 /************************************  Mainloop ******************************/ 
 
 void loop() {
+  DacAudio.FillBuffer();              //Fill the sound buffer with data
   loopcount=loopcount+1;
   if(gestureInProgress){
     untouched=false;
   }
-  if (loopcount == 1) {
+  if (loopcount == 3000) {
     if(untouched) {
         //SIGNAL
         playAlarm(BLUE,400,3);
         WiFiManager wifiManager;
         wifiManager.autoConnect("garrick");
         checkForUpdates();
+        wifiManager.disconnect();
+        WiFi.mode(WIFI_OFF);    // Switch WiFi off to save power
     }
   }
-  if (loopcount < 3000){
-    Serial.print(".");
-  }
   try {
+    mpu.enableSleep(false);
     readMpu();
   } catch(String error) {
-    Serial.print("Can't read from MPU6050 error: ");
-    Serial.println(error);
+    // DEBUG: Serial.printf("Can't read from MPU6050 error: %s\n",error);
     //SIGNAL
     playAlarm(RED,1000,2);
     playAlarm(BLUE,1000,2);
   }
   detectGesture();
-  detectCircularMotion();
-  soundloop();
-  delay(1);
+  //detectCircularMotion();
+  
+  // DEBUG: Serial.print(round(accX));
+  // DEBUG: Serial.print("\t");
+  // DEBUG: Serial.print(round(accY));
+  // DEBUG: Serial.print("\t");
+  // DEBUG: Serial.print(round(accZ));
+  // DEBUG: Serial.print("\t");
+  // DEBUG: Serial.print(round(gyroX));
+  // DEBUG: Serial.print("\t");
+  // DEBUG: Serial.print(round(gyroY));
+  // DEBUG: Serial.print("\t");
+  // DEBUG: Serial.print(round(gyroZ));
+  // DEBUG: Serial.print("\n");
 }
