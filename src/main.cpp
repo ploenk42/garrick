@@ -66,33 +66,27 @@ int top = -1;
 // OTA update
 const unsigned long triggerDelay = 10000; // 10 seconds in milliseconds
 bool triggered = false;
-const char* CURRENT_VERSION = "1.0.0";
-//const char* REPO_URL = "https://api.github.com/repos/ploenk42/garrick/releases/latest";
-const char* REPO_URL = "https://motoko.local:8443/latest";
+const char* CURRENT_VERSION = "1.0.2";
+const char* REPO_URL = "https://api.github.com/repos/ploenk42/garrick/releases/latest";
+//const char* REPO_URL = "https://motoko.local:8443/latest";
 
 // (self-signed) root certificate in PEM format
 const char* rootCACertificate = R"(
 -----BEGIN CERTIFICATE-----
-MIIDmTCCAoGgAwIBAgIUKeTDccZntHxV8ISSR8hbHTf86ugwDQYJKoZIhvcNAQEL
-BQAwXDELMAkGA1UEBhMCQVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoM
-GEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDEVMBMGA1UEAwwMbW90b2tvLmxvY2Fs
-MB4XDTI0MDkxNDIxMzAxNVoXDTI1MDkxNDIxMzAxNVowXDELMAkGA1UEBhMCQVUx
-EzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdpdHMg
-UHR5IEx0ZDEVMBMGA1UEAwwMbW90b2tvLmxvY2FsMIIBIjANBgkqhkiG9w0BAQEF
-AAOCAQ8AMIIBCgKCAQEAkYV9UpFmz891Y+woT7+/aVmH4qoeOWX2Bkwx+OGBdrho
-nNpBD6H/bgKfB+P/gSrooa5Um+A6f5yfpmVua6rG576SIlS6hNsBVwBvFaIoLyOO
-r4LyGiMNqfNWY6wmBit9qLws4wg9C7b6pn8aVSXHK9BnF/sKBTDhj/Go9doRpD0x
-fTOIKDyTM7LB4lJ6YlE1LmIDAMVj9+ROpW96U+d5BLlsLCUwSpFfmCLfcy4yGKJG
-YEJpcsvSfxocEXl/B/r5fCdWStlzlWKNjO2BXZ5tTdwHW4lCWMb1VGlIhVgkRRhz
-01F2AIQ5VeDvFKpxXngza9J3VS1cXm4Q0S/pS6meeQIDAQABo1MwUTAdBgNVHQ4E
-FgQUsJa+9L2353ihbphuiM713K+mKrYwHwYDVR0jBBgwFoAUsJa+9L2353ihbphu
-iM713K+mKrYwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEADFA2
-MW+Mde8orNmqJ0tjz4iOaL/FP9lyNyZ6aP2QOBr8ZZwDQ9o4QIpnMTBVp67jFh8A
-oE4DnnnN1V5iXdIvLn619JcKbjElMcp/aPEh6vFQjaRwXOAfsqO3mWirxOBkI6Ub
-Bto96gU+Z9SsIToAA9kvLJErSdxZKgQhcUJP0AR+pmbcU+RrvsDsTbU7jZQqxU37
-XOxw7K97lH/Mqrkl3ecCEocn6J13k+aVbr174upjvp7vdEqyqrwBpnLh2tLpHs3h
-AQ8zAlIsBt8f5r83iJH69RNH1BFJvBXvEa1uuqY2ojdjpTKPEWR/Z8ESoRNowq7e
-BxMioL9s0L4LCWo8qA==
+MIICjzCCAhWgAwIBAgIQXIuZxVqUxdJxVt7NiYDMJjAKBggqhkjOPQQDAzCBiDEL
+MAkGA1UEBhMCVVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNl
+eSBDaXR5MR4wHAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMT
+JVVTRVJUcnVzdCBFQ0MgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMTAwMjAx
+MDAwMDAwWhcNMzgwMTE4MjM1OTU5WjCBiDELMAkGA1UEBhMCVVMxEzARBgNVBAgT
+Ck5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYDVQQKExVUaGUg
+VVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBFQ0MgQ2VydGlm
+aWNhdGlvbiBBdXRob3JpdHkwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAQarFRaqflo
+I+d61SRvU8Za2EurxtW20eZzca7dnNYMYf3boIkDuAUU7FfO7l0/4iGzzvfUinng
+o4N+LZfQYcTxmdwlkWOrfzCjtHDix6EznPO/LlxTsV+zfTJ/ijTjeXmjQjBAMB0G
+A1UdDgQWBBQ64QmG1M8ZwpZ2dEl23OA1xmNjmjAOBgNVHQ8BAf8EBAMCAQYwDwYD
+VR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAwNoADBlAjA2Z6EWCNzklwBBHU6+4WMB
+zzuqQhFkoJ2UOQIReVx7Hfpkue4WQrO/isIJxOzksU0CMQDpKmFHjFJKS04YcPbW
+RNZu9YO6bVi9JNlWSOrvxKJGgYhqOkbRqZtNyWHa0V1Xahg=
 -----END CERTIFICATE-----
 )";
 
@@ -164,10 +158,25 @@ bool performUpdate(const char* url, const char* type) {
     return false;
   }
 
-  Serial.printf("get content from %s ...",url);
+  int maxRedirects = 5;
+  int redirectCount = 0;
+
+  Serial.printf("get content from %s ...\n",url);
   int httpCode = https.GET();
-  if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("ERROR: https unable to get content... code: %d\n", httpCode);
+  while (httpCode == HTTP_CODE_FOUND && redirectCount < maxRedirects) {
+    String newUrl = https.getLocation();
+    Serial.printf("INFO: redirecting: %s\n", newUrl);
+    https.end();
+    https.begin(newUrl);
+    httpCode = https.GET();
+    redirectCount++;
+  }
+  if (httpCode != HTTP_CODE_OK){
+    if (redirectCount >= maxRedirects){
+      Serial.printf("ERROR: https unable to get content... too many redirects");
+    }else{
+      Serial.printf("ERROR: https unable to get content... code: %d\n", httpCode);
+    }
     https.end();
     delete client;
     return false;
