@@ -423,13 +423,13 @@ void detectGesture() {
     // if gesture duration passed
     if (millis() - gestureStartTime > GESTURE_DURATION) {
       // still pointing straight up or straight down
-      if (accY >= 9){
+      if (accY <= -9){
         if (!sequenceActive){
           pointup();
           return;
         }
       }
-      if (accY <= -9){
+      if (accY >= 9){
         pointdown();
         return;
       }
