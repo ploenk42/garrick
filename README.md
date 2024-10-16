@@ -35,3 +35,6 @@ In version 1.0.3 the spell sequence needs to be initialized by holding the wand 
 
 - $${\color{GREEN}GREEN}$$ $${\color{GREEN}\infty}$$ 
 
+## errors
+accelerometer not found
+-  $${\color{RED}RED}$$ $${\color{BLUE}BLUE}$$ $${\infty}$$ 
